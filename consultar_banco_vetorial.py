@@ -4,79 +4,131 @@ from langchain_openai import OpenAIEmbeddings # Para gerar vetores semânticos u
 from langchain_community.vectorstores import FAISS # Para gerenciar um banco de dados vetorial FAISS
 from langchain_groq import ChatGroq
 
-# Define o caminho onde o banco vetorial está armazenado
-caminho_banco_vetorial = 'faiss_perguntas_respostas'
+def carregar_banco_vetorial(caminho='banco_vetorial'):
+    """Carrega o banco vetorial salvo."""
 
-# Inicializa os embeddings da OpenAI para transformar texto em vetores semânticos
-embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+    # Verifica se o banco vetorial existe
+    if not os.path.exists(caminho):
+        raise ValueError(f'Banco vetorial não encontrado em: {caminho}')
 
-# Carrega o banco vetorial existente do FAISS no caminho especificado
-# O parâmetro `allow_dangerous_deserialization=True` permite carregar dados potencialmente inseguros
-banco_vetorial = FAISS.load_local(
-    folder_path=caminho_banco_vetorial, # Caminho onde o banco está armazenado
-    embeddings=embeddings, # Usa o mesmo método de embeddings com o qual o banco foi criado
-    allow_dangerous_deserialization=True # Habilita carregamento de arquivos potencialmente inseguros
-)
-# Uso de um banco de informações externo:: utiliza o FAISS para recuperar textos relevantes com base em embeddings.
-# O banco vetorial FAISS é utilizado para armazenar e buscar informações relevantes.
-# O parâmetro embeddings é necessário para o método load_local porque o banco vetorial foi originalmente criado usando uma função específica de embeddings.
-# A maneira como os textos são representados depende diretamente do modelo de embeddings utilizado.
-# Para garantir que as consultas sejam representadas no mesmo espaço vetorial do banco de dados, o mesmo método de embeddings precisa ser aplicado.
-# Se você não fornecer o mesmo método, o FAISS não saberá como gerar os vetores das novas consultas, e a correspondência semântica falhará ou produzirá resultados inconsistentes.
+    # Inicializa o modelo de embeddings
+    modelo_embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
 
-# Pergunta feita pelo usuário
-pergunta_usuario = input('Pergunta: ')
+    # Carrega o banco vetorial
+    banco_vetorial = FAISS.load_local(caminho, modelo_embeddings, allow_dangerous_deserialization=True)
 
-# Realiza uma busca no banco vetorial com base na similaridade semântica da pergunta
-# Retorna os 3 documentos mais similares, junto com seus scores
-resultados = banco_vetorial.similarity_search_with_score(pergunta_usuario, k=3)
-# Os textos recuperados serão organizados em um contexto, que será utilizado para enriquecer a resposta do modelo de linguagem.
-# Modelos de linguagem têm um limite fixo de tokens que podem ser processados em uma única solicitação (entrada + saída).
-# Por exemplo, um modelo pode suportar até 4096 tokens.
-# Incorporar todos os dados disponíveis no banco de conhecimento ao prompt seria inviável porque poderia ultrapassar o limite de tokens.
-# Redução de ruído e relevância: Selecionar apenas os trechos mais relevantes do banco vetorial garante que o contexto fornecido ao modelo seja útil e significativo.
-# Isso evita que tokens sejam desperdiçados com informações irrelevantes, aumentando a eficiência e a qualidade da resposta.
-# Recuperar trechos relevantes reduz a quantidade de dados que precisam ser incorporados ao prompt.
-# Assim, o espaço de tokens disponível pode ser melhor aproveitado para a pergunta do usuário e a resposta gerada pelo modelo.
+    return banco_vetorial
 
-# Itera sobre os resultados para exibir os textos relevantes e seus scores
-# for documento, score in resultados:
-#     # Exibe o conteúdo do documento e o score de similaridade no console
-#     print(f"Texto: {documento.page_content}, Score de similaridade: {score}")
+def configurar_modelo_conversa():
+    """Configura o modelo de linguagem para conversação."""
 
-# Configura o modelo de linguagem da API Groq
-modelo = ChatGroq(
-    model='llama-3.1-70b-versatile', # Nome do modelo de linguagem
-    # temperature=0, # Parâmetro opcional para controlar a criatividade (mais baixo = menos criativo)
-    api_key=os.getenv('GROQ_API_KEY') # Chave de API armazenada em variável de ambiente
-)
+    modelo = ChatGroq(
+        model='llama-3.1-70b-versatile', # Modelo de conversação
+        temperature=0.2, # Baixa criatividade para respostas mais precisas
+        max_tokens=500, # Limite de tokens na resposta
+        api_key=os.getenv('GROQ_API_KEY')
+    )
 
-# Inicializa o contexto, que será usado para formar uma resposta ao usuário
-contexto = ''
+    return modelo
 
-# Concatena os textos relevantes obtidos do banco vetorial para formar o contexto
-for documento, score in resultados:
-    contexto += f'{documento.page_content}\n\n' # Adiciona cada conteúdo de documento ao contexto
-# print(contexto)
+def montar_prompt(fragmentos, pergunta, contexto_memoria):
+    """Monta manualmente o prompt com os fragmentos e a memória de contexto."""
 
-# Define a lista de mensagens para o modelo de linguagem Groq
-mensagens = [
-    # Mensagem de configuração inicial informando o papel do modelo
-    {'role': 'system', 'content': 'Você é um assistente de atendimento de um SAC de um banco digital.'},
-    # Mensagem com o contexto gerado a partir dos resultados da busca no banco vetorial
-    {'role': 'system', 'content': f'Para responder ao usuário, você deve se basear nas seguintes perguntas e respostas que já foram feitas anteriormente:\n{contexto}\n'}
-]
-# Criação de contexto dinâmico: as informações recuperadas do FAISS são injetadas dinamicamente no prompt do modelo de linguagem.
+    template = """
+    Use os trechos fornecidos para responder a pergunta do usuário de forma clara e concisa.
+    Se não souber a resposta, diga que não sabe.
 
-# Adiciona a pergunta feita pelo usuário à lista de mensagens
-mensagens.append({'role': 'human', 'content': pergunta_usuario})
+    ### Contexto anterior:
+    {contexto_memoria}
 
-# Envia as mensagens ao modelo de linguagem e recebe a resposta
-resposta = modelo.invoke(mensagens)
-# Após adicionar o contexto ao prompt, o modelo de linguagem ChatGroq gera uma resposta com base na pergunta do usuário e nas informações recuperadas.
-# Interação com um modelo generativo: o ChatGroq usa o contexto para gerar uma resposta específica e enriquecida para a consulta do usuário.
+    ### Trechos:
+    {fragmentos}
 
-# Exibe a resposta gerada pelo modelo no console
-print(resposta.content)
-# Essa abordagem combina retrieval (para garantir que a resposta seja fundamentada em dados precisos)
-# com generation (para criar respostas em linguagem natural), que é a essência de um sistema RAG.
+    ### Pergunta:
+    {pergunta}
+
+    ## Resposta:
+    """
+
+    # Juntar todos os fragmentos em um único texto
+    # contexto = '\n'.join([f'{idx+1}. {doc.page_content}\n' for idx, doc in enumerate(fragmentos)])
+    contexto = '\n'.join([f'{idx+1}. {doc[0].page_content}\n' for idx, doc in enumerate(fragmentos)])
+
+    # Criar e formatar o prompt
+    prompt = template.format(contexto_memoria=contexto_memoria, fragmentos=contexto, pergunta=pergunta)
+
+    return prompt
+
+def conversar():
+    """Interface principal para conversar com os documentos carregados, mantendo memória de contexto."""
+
+    # Inicializa a memória de contexto como uma string vazia
+    contexto_memoria = ''
+
+    try:
+        # Carregar banco vetorial
+        banco_vetorial = carregar_banco_vetorial()
+
+        # Configurar modelo de conversação
+        modelo = configurar_modelo_conversa()
+
+        # Loop de conversação
+        while True:
+            # Solicitar pergunta ao usuário
+            pergunta = input("\n📄 Qual sua pergunta sobre os documentos? (ou 'sair' para encerrar): ")
+
+            # Condição de saída
+            if pergunta.lower() == 'sair':
+                print('Encerrando conversa. Até logo! 👋')
+                break
+
+            # Processar pergunta
+            try:
+                # Recuperar fragmentos relevantes
+                # recuperador = banco_vetorial.as_retriever(search_kwargs={'k': 3})
+                # documentos_relevantes = recuperador.invoke(pergunta)
+                # documentos_relevantes = banco_vetorial.similarity_search(pergunta, k=3)
+                documentos_relevantes = banco_vetorial.similarity_search_with_score(pergunta, k=3)
+
+                # Montar o prompt
+                prompt = montar_prompt(documentos_relevantes, pergunta, contexto_memoria)
+
+                print('\n🛠️ Prompt Montado Manualmente:\n')
+                print(prompt) # Visualizar o prompt completo
+
+                # Obter resposta do modelo
+                resposta = modelo.invoke(prompt)
+
+                # Adicionar a interação ao contexto de memória
+                contexto_memoria += f'Pergunta: {pergunta}\nResposta: {resposta.content}\n------'
+
+                # Manter apenas as últimas 5 interações
+                interacoes = contexto_memoria.split('------') # Divide em interações
+                interacoes_filtradas = interacoes[-5:] # Filtra as últimas 5
+                contexto_memoria = '------\n'.join(interacoes_filtradas) # Reconstrói o contexto
+
+                # Imprimir resposta
+                print('\n🤖 Resposta:')
+                print(resposta.content)
+
+                # Mostrar fontes (opcional)
+                print('\n📍 Fontes:')
+                # for idx, documento in enumerate(documentos_relevantes, 1):
+                for idx, (documento, score) in enumerate(documentos_relevantes, 1):
+                    print(f"{idx}. Página {documento.metadata.get('page', 'N/A')}: {documento.metadata.get('source', 'N/A')}")
+                    print(f'  Score de similaridade: {score:.4f}') # Mostra o score com 4 casas decimais
+                    # Scores próximos a 0 indicam documentos muito similares
+                    # Scores tipicamente variam entre 0 e 1
+                    # Scores acima de 0.5 geralmente indicam baixa similaridade
+                    # Um documento idêntico teria score 0
+                    print(f'  Trecho: {documento.page_content[:200]}...\n')
+
+            except Exception as erro:
+                print(f'Erro ao processar pergunta: {erro}')
+
+    except Exception as erro:
+        print(f'Erro ao iniciar conversação: {erro}')
+
+# Execução principal
+if __name__ == '__main__':
+    conversar()

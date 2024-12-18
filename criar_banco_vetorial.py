@@ -1,38 +1,48 @@
 import os
-import shutil
 from langchain_community.document_loaders import CSVLoader # Importa o carregador de CSV do LangChain
 from langchain_openai import OpenAIEmbeddings # Importa os embeddings da OpenAI para gerar os vetores
 from langchain_community.vectorstores import FAISS # Importa o FAISS para criar o banco vetorial
 
-# Define o caminho do arquivo CSV com as perguntas e respostas
-arquivo_csv = 'perguntas_respostas.csv'
+def carregar_arquivo_csv(caminho_arquivo_csv):
+    # Inicializa o carregador para ler o arquivo CSV
+    carregador = CSVLoader(file_path=caminho_arquivo_csv, encoding='utf-8')
+    # Carregar os documentos do CSV
 
-# Define o caminho da pasta onde o banco vetorial será salvo
-pasta_faiss = 'faiss_perguntas_respostas'
+    documentos = carregador.load()
+    # Transforma cada linha do CSV em um documento que pode ser usado para gerar embeddings
+    # Cada linha do CSV será tratada como um único "documento" no contexto vetorial
 
-# Verifica se a pasta já existe. Se sim, deleta a pasta e todo o conteúdo.
-if os.path.exists(pasta_faiss):
-    print(f"Removendo pasta existente: {pasta_faiss}")
-    shutil.rmtree(pasta_faiss)
+    # Retorna a lista de todos os documentos carregados
+    return documentos
 
-# Inicializa o carregador para ler o arquivo CSV
-carregador = CSVLoader(file_path=arquivo_csv, encoding='utf-8')
+def criar_banco_vetorial(documentos):
+    """Cria embeddings para os documentos e salva no FAISS."""
 
-# Carregar os documentos do CSV
-documentos = carregador.load()
-# Transforma cada linha do CSV em um documento que pode ser usado para gerar embeddings
-# Cada linha do CSV será tratada como um único "documento" no contexto vetorial
+    # Inicializa o modelo de embeddings da OpenAI
+    modelo_embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
 
-# Exibir os documentos carregados
-# for i, doc in enumerate(documentos, start=1):
-#     print(f'{i}. {doc.page_content}')
+    # Cria o banco vetorial FAISS a partir dos documentos e do modelo de embeddings
+    banco_vetorial = FAISS.from_documents(documentos, modelo_embeddings)
 
-# Inicializa os embeddings da OpenAI para transformar texto em vetores semânticos
-embeddings = OpenAIEmbeddings(api_key=os.getenv('OPENAI_API_KEY'))
+    # Retorna o banco vetorial
+    return banco_vetorial
 
-# Cria o banco vetorial FAISS a partir dos documentos e seus respectivos embeddings
-armazenamento_vetorial = FAISS.from_documents(documents=documentos, embedding=embeddings)
-# O FAISS otimiza a busca de similaridade entre os vetores
+def salvar_banco_vetorial(banco_vetorial, caminho='banco_vetorial'):
+    """Salva o banco vetorial em disco."""
 
-# Salva o banco vetorial no diretório local para reutilização em futuras execuções
-armazenamento_vetorial.save_local(folder_path=pasta_faiss)
+    # Salva o banco vetorial no caminho especificado
+    banco_vetorial.save_local(caminho)
+
+    # Imprime o local de salvamento
+    print(f'Banco vetorial salvo em: {caminho}')
+
+# Bloco de execução principal, rodado apenas se o script for executado diretamente
+if __name__ == '__main__':
+    # Carrega o arquivo
+    documentos = carregar_arquivo_csv('perguntas_respostas.csv')
+
+    # Cria banco vetorial
+    banco_vetorial = criar_banco_vetorial(documentos)
+
+    # Salva o banco vetorial em disco
+    salvar_banco_vetorial(banco_vetorial)
